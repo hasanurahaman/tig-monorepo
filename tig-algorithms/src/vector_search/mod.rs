@@ -233,7 +233,8 @@ pub use helix_search as c004_a106;
 pub mod there_v11;
 pub use there_v11 as c004_a107;
 
-// c004_a108
+pub mod vector_ada_v1;
+pub use vector_ada_v1 as c004_a108;
 
 // c004_a109
 
