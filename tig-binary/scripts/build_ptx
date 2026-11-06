@@ -288,7 +288,7 @@ def main():
             "-arch", "compute_70",
             "-code", "sm_70",
             "--use_fast_math",
-            "-dopt=on"
+            "-dopt=on", "-D", "uint=unsigned int", "-D", "u_int64_t=uint64_t"
         ]
 
         print(f"Running nvcc command: {' '.join(nvcc_command)}")

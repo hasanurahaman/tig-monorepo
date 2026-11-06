@@ -8,7 +8,7 @@ macro_rules! conditional_pub {
         pub fn $name $($rest)*
 
         #[cfg(feature = "hide_verification")]
-        fn $name $($rest)*
+        pub fn $name $($rest)*
     };
 }
 

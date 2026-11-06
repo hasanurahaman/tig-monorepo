@@ -19,12 +19,20 @@ rand = { version = "0.8.5", default-features = false, features = [
 ] }
 serde = { version = "1.0.196", features = ["derive"] }
 serde_json = { version = "1.0.113" }
-tig-challenges = { path = "../tig-challenges", features = [
-    "hide_verification",
-] }
+tig-challenges = { path = "../tig-challenges" }
 
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+[[example]]
+name = "benchmark_vector_search"
+path = "examples/benchmark_vector_search.rs"
+required-features = ["c004"]
+
+[[example]]
+name = "benchmark_neuralnet_optimizer"
+path = "examples/benchmark_neuralnet_optimizer.rs"
+required-features = ["c006"]
 
 [features]
 c001 = ["tig-challenges/c001"]

@@ -11,6 +11,12 @@ pub(crate) type HashSet<T> = std::collections::HashSet<T, RandomState>;
 
 pub const BUILD_TIME_PATH: &str = env!("CARGO_MANIFEST_DIR");
 
+// Fallback symbols when compiling without TIG's custom LLVM injector
+#[no_mangle]
+pub static mut __fuel_remaining: u64 = 100_000_000_000;
+#[no_mangle]
+pub static mut __runtime_signature: u64 = 0;
+
 #[cfg(feature = "c001")]
 pub mod satisfiability;
 #[cfg(feature = "c001")]

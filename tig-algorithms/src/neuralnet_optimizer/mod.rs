@@ -121,7 +121,8 @@ pub use dc_vega_v3 as c006_a052;
 pub mod parallax_arcturus;
 pub use parallax_arcturus as c006_a054;
 
-// c006_a055
+pub mod hyper_optim_v1;
+pub use hyper_optim_v1 as c006_a055;
 
 // c006_a056
 
