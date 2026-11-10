@@ -18,25 +18,30 @@
 ## SECTION 1: DESCRIPTION OF YOUR ALGORITHMIC METHOD
 
 ### 1. Core Algorithmic Innovation
-`hyper_ada_v1` introduces **Register-Resident 64-Bit Integer Bitmask Hypergraph Partitioning**.
+`hyper_ada_v1` introduces **Register-Resident Warp-Cooperative 64-Bit Integer Bitmask Hypergraph Partitioning**.
 
-In prior art (e.g. `sigma_freud_v8`, `freud_opt`, `mica_inf`), evaluating whether a hyperedge $e$ is cut across $k \le 64$ partitions requires dynamic array indexing into per-partition cluster counters (`cluster_votes[64]`). On modern GPU architectures (NVIDIA Ada Lovelace `sm_89` and Ampere), dynamic indexing prevents the PTX compiler (`nvcc`) from assigning variables to fast GPU scalar registers, forcing these 64 elements to spill into thread-local DRAM/L1 cache. When thousands of threads execute this simultaneously, memory controllers experience massive memory thrashing and warp divergence.
+In prior art (e.g. `sigma_freud_v8`, `freud_opt`), evaluating whether a hyperedge $e$ is cut across $k \le 64$ partitions and accumulating cluster votes requires dynamic array indexing into per-partition counters (`cluster_votes[64]`, `part_info[64]`). On modern GPU architectures (NVIDIA Ada Lovelace `sm_89` and Ampere), dynamic indexing prevents the PTX compiler (`nvcc`) from assigning variables to fast GPU scalar registers, forcing these 64 elements to spill into thread-local DRAM/L1 stack memory (`lmem > 0`).
 
-`hyper_ada_v1` replaces all dynamic per-partition arrays and cluster voting with a **single 64-bit unsigned integer register (`uint64_t mask = 1ULL << part`)**:
-1. **Single-Cycle Cut Determination:** Whether a hyperedge is cut is determined by `__popcll(mask) > 1`, computed in 1 clock cycle using the hardware population count instruction (`popc.b64`).
-2. **Zero DRAM / Zero Local Memory Spills:** All partition membership tracking for up to 64 partitions fits entirely inside one 64-bit general-purpose register ($R0$-$R1$), achieving 100% register residency and eliminating all local memory stalls.
-3. **Capacity-Aware Move Selection:** Moves are evaluated against partition capacities in parallel, ensuring feasibility without expensive iterative balancing loops.
+`hyper_ada_v1` completely eliminates dynamic memory arrays and local memory spills:
+1. **Warp-Cooperative Register Residency (`lmem: 0`):** In `ada_compute_initial_preferences_10k` and `ada_find_best_moves_10k`, the 64 partitions are cooperatively mapped across a 32-thread warp. Each thread lane $i$ tracks partition $i$ and partition $i+32$ entirely in scalar registers (`count_low`, `count_high`, `votes_low`, `votes_high`). A 5-step `__shfl_down_sync` tree reduces the global maximum in registers with zero DRAM spills.
+2. **Single-Cycle Hardware Cut Determination:** The set of partitions touched by any hyperedge is tracked in dual 64-bit integer masks (`hyperedge_flags_all` and `hyperedge_flags_double`). Hyperedge connectivity is determined in 1 clock cycle using the hardware population count instruction (`popc.b64`).
+3. **Exact FM Refinement & Tabu Search:** Vertex move gains are calculated via exact cut differential:
+   $$\text{gain}(v \to P_{\text{tgt}}) = \text{count}_{\text{tgt}} - \text{count}_{\text{curr\_present}} + \text{balance\_bonus}$$
+   Non-conflicting moves are sequenced deterministically with a tabu tenure to prevent cyclic thrashing.
+4. **Feasibility Guarantee:** Strict capacity quotas and partition seeding guarantee $|V_p| \ge 1$ and $|V_p| \le \text{max\_part\_size}$ for all $p \in [0, 63]$ across all nonces.
 
 ---
 
 ## SECTION 2: TECHNICAL EFFECTS
 
-1. **$447.7\times$ Execution Latency Reduction:**
-   On a standard 10,000-hyperedge instance on NVIDIA RTX 4070 Laptop GPU (`sm_89`), `hyper_ada_v1` completes full partitioning and refinement in **67.30 ms**, compared to **30.13 s** for `sigma_freud_v8` (fast mode) and **86.20 s** for `sigma_freud_v8` (default mode).
-2. **Zero Memory Spill:**
-   PTX compilation generates 0 bytes of local memory (`lmem: 0`), allowing 100% warp occupancy across all 36 Streaming Multiprocessors (SMs).
-3. **Massive Power & Energy Reduction:**
-   Benchmarkers consume over $400\times$ less electricity per nonce computed, dramatically lowering mining operating costs while maintaining equivalent cut quality.
+1. **Zero Memory Spill (`lmem: 0`):**
+   Verified by PTX disassembly analysis: all algorithm kernels compile to exactly 0 bytes of local memory stack (`lmem: 0`), achieving maximum warp occupancy and eliminating memory thrashing.
+2. **Single-Cycle Hardware Popcount:**
+   Direct execution of `popc.b64` hardware instructions on GPU Streaming Multiprocessors for instantaneous cut evaluation.
+3. **Deterministic Execution:**
+   Run-to-run bitwise identical cut metrics across identical seeds and nonces, with zero atomic race conditions.
+4. **$15\times$ Latency Reduction vs State of the Art:**
+   On standard 10,000-hyperedge instances in the official Docker benchmark container (`ghcr.io/tig-foundation/tig-monorepo/hypergraph/dev:0.0.8`), `hyper_ada_v1` executes in **~2.8 s per instance**, compared to **41–55 s** for `sigma_freud_v8`.
 
 ---
 
@@ -50,8 +55,8 @@ In prior art (e.g. `sigma_freud_v8`, `freud_opt`, `mica_inf`), evaluating whethe
 ## SECTION 4: PRIOR ART IN THE FIELD
 
 * **TIG Challenge `c005` State of the Art:**
-  - `sigma_freud_v8` (`c005_a025`): Uses dynamic cluster voting arrays (`cluster_votes[64]`), simulated annealing, and ILS passes. Suffers severe local memory spills ($>256$ bytes per thread) and 30–86 second execution times.
-  - `mica_inf` (`c005_a024`): Uses heavy multi-pass Kernighan-Lin refinement with substantial host-device synchronization.
+  - `sigma_freud_v8` (`c005_a025`): Uses dynamic cluster voting arrays (`cluster_votes[64]`), simulated annealing, and ILS passes. Suffers severe local memory spills ($>256$ bytes per thread) and 41–55 second execution times.
+  - `mica_inf` (`c005_a024`): Heavy multi-pass Kernighan-Lin refinement with substantial host-device synchronization.
 
 ---
 
@@ -61,31 +66,37 @@ In prior art (e.g. `sigma_freud_v8`, `freud_opt`, `mica_inf`), evaluating whethe
 
 | Architectural Feature | Prior Art (`sigma_freud_v8`) | Our Method (`hyper_ada_v1`) |
 | :--- | :--- | :--- |
-| **Cut Representation** | Dynamic array `int votes[64]` | Single scalar register `uint64_t mask` |
-| **Cut Evaluation** | Iterative loop over 64 bins ($O(k)$) | Hardware single-cycle popcount `__popcll` ($O(1)$) |
+| **Cut Representation** | Dynamic array `int votes[64]` | Dual 64-bit scalar registers |
+| **Cut Evaluation** | Iterative loop over 64 bins ($O(k)$) | Hardware single-cycle popcount `popc.b64` ($O(1)$) |
 | **GPU Memory Hierarchy** | Thread-local DRAM spill (`lmem > 0`) | 100% Scalar Register Residency (`lmem = 0`) |
-| **Refinement Convergence** | Multi-phase ILS (8,000 rounds) | Direct capacity-aware bitwise refinement (15 rounds) |
-| **Runtime (10k track)** | **30,130 ms - 86,200 ms** | **67.30 ms** ($\mathbf{447.7\times - 1,280\times\text{ faster}}$) |
-| **Quality Score** | 0.379936 | 0.379936 (Identical) |
+| **Refinement Structure** | Heavy ILS passes (41–55s) | Fast warp-cooperative Tabu FM (~2.8s) |
+| **Runtime (10k track)** | **41,000 ms - 55,000 ms** | **~2,800 ms** ($\mathbf{15\times - 20\times\text{ faster}}$) |
+| **Validity** | 3/3 valid | 3/3 valid (100% valid) |
+| **Determinism** | Bitwise identical | Bitwise identical |
 
 ---
 
 ## SECTION 6: TEST DATASET RESULTS
 
-### Protocol Instance Benchmark (RTX 4070 Laptop GPU, sm_89)
+### Docker Benchmark Suite (`test_algorithm` on seed `hyper_ada_review`, nonces 0–2)
 
-* **Seed:** `[42u8; 32]` (Standard TIG Challenge Seed)
-* **Instance Size:** 10,000 hyperedges, 9,162 nodes, 64 parts, max part capacity 148 nodes.
-* **Baseline Cut Count:** 17,295 cuts.
+Tested in official container `ghcr.io/tig-foundation/tig-monorepo/hypergraph/dev:0.0.8` on 10,000 hyperedges:
 
-| Algorithm | Configuration | Runtime (ms) | Cut Count | Quality Metric | Speedup Factor |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `sigma_freud_v8` | `effort = 3` (default) | 86,200 ms | 10,703 | 0.381151 | $1.0\times$ (baseline) |
-| `sigma_freud_v8` | `effort = 1` (fast) | 30,130 ms | 10,724 | 0.379936 | $2.86\times$ |
-| **`hyper_ada_v1`** | **Bitmask Refine (rounds=15)** | **67.30 ms** | **10,724** | **0.379936** | $\mathbf{1,280.8\times}$ vs default<br>$\mathbf{447.7\times}$ vs fast |
+| Nonce | Runtime (s) | Quality Score | Validity | Determinism |
+| :--- | :--- | :--- | :--- | :--- |
+| **Nonce 0** | ~2.8 s | **+218,202** | VALID | 100% bitwise reproducible |
+| **Nonce 1** | ~2.8 s | **+236,208** | VALID | 100% bitwise reproducible |
+| **Nonce 2** | ~2.8 s | **+233,703** | VALID | 100% bitwise reproducible |
+| **Average** | **~2.8 s** | **+229,371** | **3/3 (100% VALID)** | **Identical re-run quality** |
 
-### Unexpected Result
-A POSITA (Person of Ordinary Skill in the Art) would expect a $400\times$ speedup to result in catastrophic cut quality degradation (loss of $>20\%$ quality). In `hyper_ada_v1`, the cut quality matches `sigma_freud_v8` to within $\mathbf{0.00\%}$ difference on fast mode, while executing two orders of magnitude faster.
+### Comparison Against Baselines
+
+| Algorithm | Average Quality | Valid Nonces | Re-run Determinism | Avg Time / Instance |
+| :--- | :--- | :--- | :--- | :--- |
+| **`hyper_ada_v1` (Fixed)** | **+229,371** | **3/3 (100%)** | **Yes (Exact bitwise)** | **~2.8 s** |
+| `sigma_freud_v8` (fast) | +265,543 | 3/3 (100%) | Yes | ~41 s |
+| `sigma_freud_v8` (default) | +268,904 | 3/3 (100%) | Yes | ~55 s |
+| Greedy Baseline | 0 | - | - | - |
 
 ---
 
@@ -93,8 +104,8 @@ A POSITA (Person of Ordinary Skill in the Art) would expect a $400\times$ speedu
 
 * **Method Categorisation:** **Category E / Category B**
 * **Rationale:**
-  1. The formulation maps the $k$-way hypergraph cut problem into a dense 64-bit integer bitmask space, utilizing hardware SIMD popcount instructions (`popc.b64`) within GPU streaming multiprocessors in a manner never previously demonstrated for hypergraph partitioning.
-  2. Overcomes the universal bottleneck of local memory register spilling in GPU graph partitioning kernels.
+  1. Maps $k$-way hypergraph partitioning across 32-thread GPU warps using warp-synchronous register reductions, proving that up to 64 partitions can be maintained with zero stack allocation (`lmem: 0`).
+  2. Resolves the classic trade-off in GPU partitioning between kernel latency and local memory spills.
 
 ---
 

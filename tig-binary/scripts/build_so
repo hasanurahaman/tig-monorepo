@@ -81,8 +81,7 @@ process_file() {
             echo "Skipping $ll_file (not in whitelist)"
 
             cat "$ll_file" | \
-            llc -relocation-model=pic -o - | \
-            clang -fPIC -c -x assembler - -o "$temp_obj"
+            llc -filetype=obj -relocation-model=pic -o "$temp_obj"
             
             return 0
         fi
@@ -97,8 +96,7 @@ process_file() {
     IS_FIRST_SRC=$is_first INSTRUMENT_FUEL=1 INSTRUMENT_RTSIG=1 INSTRUMENT_MEMORY=1 LL_FILE_BASENAME="$basename" opt \
             -load-pass-plugin /opt/llvm/lib/LLVMFuelRTSig.so \
             -passes="fuel-rt-sig" -S -o - | \
-    llc -relocation-model=pic -o - | \
-    clang -fPIC -c -x assembler - -o "$temp_obj"
+    llc -filetype=obj -relocation-model=pic -o "$temp_obj"
     
     return $?
 }
