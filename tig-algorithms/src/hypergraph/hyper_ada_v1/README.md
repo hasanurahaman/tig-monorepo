@@ -4,10 +4,10 @@
 
 * **Challenge Name:** hypergraph
 * **Algorithm Name:** hyper_ada_v1
-* **Copyright:** 2026 Antigravity & User
-* **Identity of Submitter:** Antigravity Engineering
-* **Identity of Creator of Algorithmic Method:** Antigravity Engineering
-* **Unique Algorithm Identifier (UAI):** c005_a038
+* **Copyright:** 2026 Mohammad
+* **Identity of Submitter:** Mohammad
+* **Identity of Creator of Algorithmic Method:** null
+* **Unique Algorithm Identifier (UAI):** null
 
 ## Additional Details
 
